@@ -29,6 +29,7 @@ Item {
   property var entries: []
   property double lastSeen: 0
   property bool loaded: false
+  property var hiddenRules: []
 
   readonly property bool watching: watchProc.running
 
@@ -102,6 +103,35 @@ Item {
     Quickshell.execDetached(root.storeCommand(["clear"]))
   }
 
+  function loadHidden() {
+    if (hiddenProc.running) return
+    hiddenProc.command = root.storeCommand(["hidden"])
+    hiddenProc.running = true
+  }
+
+  // Exact on (app, summary): see the "why" on cmd_hide in the store script.
+  // Updates entries here as well as hiddenRules, since a rule made from a
+  // card already in the list takes that card out of the list too.
+  function hide(app, summary) {
+    if (!app && !summary) return
+    var nextEntries = []
+    for (var i = 0; i < entries.length; i++)
+      if (entries[i].app !== app || entries[i].summary !== summary) nextEntries.push(entries[i])
+    entries = nextEntries
+    entriesReset()
+    hiddenRules = hiddenRules.concat([{ app: app, summary: summary, createdAt: Date.now() }])
+    Quickshell.execDetached(root.storeCommand(["hide", String(app), String(summary)]))
+    reloadAfterHide.restart()
+  }
+
+  function unhide(app, summary) {
+    var next = []
+    for (var i = 0; i < hiddenRules.length; i++)
+      if (hiddenRules[i].app !== app || hiddenRules[i].summary !== summary) next.push(hiddenRules[i])
+    hiddenRules = next
+    Quickshell.execDetached(root.storeCommand(["unhide", String(app), String(summary)]))
+  }
+
   function absorb(line) {
     var entry
     try {
@@ -142,7 +172,11 @@ Item {
     interval: 10000
     running: true
     repeat: true
-    onTriggered: root.load()
+    // hiddenRules needs the same periodic catch-up as entries: hide/unhide
+    // normally reload both right away (see reloadAfterHide), but a rule
+    // written from outside this instance — the CLI directly, or another
+    // screen's copy of this service — only shows up here on the next poll.
+    onTriggered: { root.load(); root.loadHidden() }
   }
 
   Process {
@@ -182,9 +216,35 @@ Item {
 
   Process { id: markProc; environment: root.storeEnvironment }
 
+  Process {
+    id: hiddenProc
+    environment: root.storeEnvironment
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var data
+        try {
+          data = JSON.parse(text)
+        } catch (e) {
+          return
+        }
+        if (Array.isArray(data)) root.hiddenRules = data
+      }
+    }
+  }
+
+  // The store's own hide/unhide run detached (see hide() above), so the rule
+  // file and the reachived archive need a moment before load()/loadHidden()
+  // read anything back that matches what just happened.
+  Timer {
+    id: reloadAfterHide
+    interval: 400
+    onTriggered: { root.load(); root.loadHidden() }
+  }
+
   Component.onCompleted: {
     readSeen()
     load()
+    loadHidden()
   }
 
   IpcHandler {

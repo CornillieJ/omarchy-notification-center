@@ -42,6 +42,7 @@ Item {
 
   signal clicked()
   signal removeRequested()
+  signal hideRequested()
 
   readonly property bool hovered: hover.hovered
   // Per-notification media first (an avatar, album art), then the app's own
@@ -314,36 +315,64 @@ Item {
         opacity: 0.75
       }
 
-      // Only shown once there is something the two-line clamp actually cut
-      // off, or once expanded (so there is a way back). A MouseArea nested in
-      // `texts`, the same trick the dismiss button uses, sits on top of the
-      // card's own and takes the click before it reaches root.clicked().
+      // A row of text links. "Show more"/"Show less" only shows once there is
+      // something the two-line clamp actually cut off, or once expanded (so
+      // there is a way back); "Hide these" is always there, since it applies
+      // to a card whether or not its body is short enough to fit. Both
+      // MouseAreas are nested in `texts`, the same trick the dismiss button
+      // uses, so they sit on top of the card's own and take the click before
+      // it reaches root.clicked().
       Item {
-        id: expandRow
-        readonly property bool show: bodyText.visible && (bodyText.truncated || root.expanded)
+        id: actionsRow
+        readonly property bool showExpand: bodyText.visible && (bodyText.truncated || root.expanded)
         width: parent.width
-        height: show ? expandLabel.implicitHeight + Style.space(2) : 0
-        visible: show
+        height: links.implicitHeight + Style.space(2)
 
-        Text {
-          id: expandLabel
-          textFormat: Text.PlainText
+        Row {
+          id: links
           anchors.right: parent.right
           anchors.bottom: parent.bottom
-          text: root.expanded ? "Show less" : "Show more"
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          font.bold: true
-          color: Color.accent
-          opacity: expandMouse.containsMouse ? 1.0 : 0.8
+          spacing: Style.space(14)
 
-          MouseArea {
-            id: expandMouse
-            anchors.fill: parent
-            anchors.margins: -Style.space(4)
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.expanded = !root.expanded
+          Text {
+            id: expandLabel
+            textFormat: Text.PlainText
+            visible: actionsRow.showExpand
+            text: root.expanded ? "Show less" : "Show more"
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            color: Color.accent
+            opacity: expandMouse.containsMouse ? 1.0 : 0.8
+
+            MouseArea {
+              id: expandMouse
+              anchors.fill: parent
+              anchors.margins: -Style.space(4)
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.expanded = !root.expanded
+            }
+          }
+
+          Text {
+            id: hideLabel
+            textFormat: Text.PlainText
+            text: "Hide these"
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            color: Color.accent
+            opacity: hideMouse.containsMouse ? 1.0 : 0.8
+
+            MouseArea {
+              id: hideMouse
+              anchors.fill: parent
+              anchors.margins: -Style.space(4)
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.hideRequested()
+            }
           }
         }
       }

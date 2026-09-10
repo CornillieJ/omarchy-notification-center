@@ -41,6 +41,7 @@ seen_file="$store/seen"
 lock_file="$store/lock"
 dismissed_file="$store/dismissed"
 cleared_at_file="$store/cleared_at"
+hidden_file="$store/hidden.jsonl"
 
 # How much is kept. Both are ceilings and the tighter one wins: 30 days of a
 # quiet week is a shorter list than 1000 notifications, and 1000 notifications
@@ -74,11 +75,12 @@ ensure_store() {
   mkdir -p "$store" "$images" || die "cannot create $store"
   [[ -f $archive ]] || : > "$archive"
   [[ -f $dismissed_file ]] || : > "$dismissed_file"
+  [[ -f $hidden_file ]] || : > "$hidden_file"
   # Installs that predate the umask above created these 755 and 644, which on a
   # machine with a second account hands over every notification you have had
   # for the reading. Cheap enough to reassert on every call.
   chmod 700 "$store" "$images" 2>/dev/null || true
-  chmod 600 "$archive" "$dismissed_file" "$seen_file" "$cleared_at_file" 2>/dev/null || true
+  chmod 600 "$archive" "$dismissed_file" "$seen_file" "$cleared_at_file" "$hidden_file" 2>/dev/null || true
 }
 
 now_ms() { printf '%s' "$(($(date +%s%N) / 1000000))"; }
@@ -112,6 +114,18 @@ is_dismissed() {
 # screen and again when it is archived.
 have_key() {
   grep -qF "\"key\":\"$1\"" "$archive" 2>/dev/null
+}
+
+# Whether a rule exists for exactly this app and summary. jq (not -R grep) is
+# what does the actual comparison, since two strings being equal is not the
+# same question as one containing the other's bytes — the mistake that once
+# emptied this store's own archive. See remove_key() below.
+is_hidden() {
+  local app=$1 summary=$2
+  [[ -s $hidden_file ]] || return 1
+  jq -Re --arg app "$app" --arg summary "$summary" \
+    'fromjson? // empty | select(.app == $app and .summary == $summary)' \
+    "$hidden_file" >/dev/null 2>&1
 }
 
 # An icon path worth copying: something on disk rather than a themed icon name
@@ -241,6 +255,26 @@ ingest_file() {
         return 0
       fi
     fi
+  fi
+
+  local hide_app hide_summary
+  hide_app=$(jq -r '.app // ""' "$file")
+  hide_summary=$(jq -r '.summary // ""' "$file")
+  if is_hidden "$hide_app" "$hide_summary"; then
+    # This file living directly under src_dir (rather than src_history) means
+    # its toast is still on screen right now: this is the close_write event
+    # from the moment it was shown, seen before the moved_to that archives it.
+    # Asking the core service to dismiss it is the closest this plugin can
+    # get to "never shown" without touching that service's own files — it
+    # still flashes for as long as one inotify round trip takes, which
+    # nothing short of a change to that service itself can close. Detached so
+    # a slow IPC call never holds the archive lock this runs under.
+    case $file in
+      "$src_history"/*) : ;;
+      *) command -v omarchy-shell >/dev/null 2>&1 &&
+         omarchy-shell notifications dismiss "$hide_summary" >/dev/null 2>&1 & ;;
+    esac
+    return 0
   fi
 
   app_icon=$(jq -r '.appIcon // ""' "$file")
@@ -503,6 +537,68 @@ cmd_remove() {
   printf '{"ok":true,"removed":%s}\n' "$(printf '%s' "$key" | jq -Rs .)"
 }
 
+# Drop every archived entry matching an (app, summary) pair, and forget it was
+# ever ingested. A rule made from a card already in the archive should reach
+# backward and take that card with it, not just apply from here on.
+purge_matching() {
+  local app=$1 summary=$2 kept
+  [[ -s $archive ]] || return 0
+  if ! kept=$(jq -Rc --arg app "$app" --arg summary "$summary" \
+      'fromjson? // empty | select(.app != $app or .summary != $summary)' "$archive" 2>/dev/null); then
+    return 0
+  fi
+  printf '%s\n' "$kept" | grep -v '^$' > "$archive.tmp" || true
+  mv -f "$archive.tmp" "$archive"
+}
+
+hide_rule() {
+  local app=$1 summary=$2
+  is_hidden "$app" "$summary" || \
+    jq -cn --arg app "$app" --arg summary "$summary" --argjson createdAt "$(now_ms)" \
+      '{app:$app, summary:$summary, createdAt:$createdAt}' >> "$hidden_file"
+  purge_matching "$app" "$summary"
+}
+
+# Hiding is exact on (app, summary) rather than a looser match on the body or
+# on summary alone: two notifications from different senders sharing a short
+# title ("Update available") are not the same recurring thing, and hiding one
+# should not silently take the other with it.
+cmd_hide() {
+  ensure_store
+  local app=$1 summary=$2
+  [[ -n $app && -n $summary ]] || die "hide needs an app and a summary"
+  with_lock hide_rule "$app" "$summary"
+  printf '{"ok":true}\n'
+}
+
+unhide_rule() {
+  local app=$1 summary=$2 kept
+  [[ -s $hidden_file ]] || return 0
+  if ! kept=$(jq -Rc --arg app "$app" --arg summary "$summary" \
+      'fromjson? // empty | select(.app != $app or .summary != $summary)' "$hidden_file" 2>/dev/null); then
+    return 0
+  fi
+  printf '%s\n' "$kept" | grep -v '^$' > "$hidden_file.tmp" || true
+  mv -f "$hidden_file.tmp" "$hidden_file"
+}
+
+# Unhiding only stops the rule from applying to what arrives from now on. It
+# does not resurrect what the rule already purged from the archive — the same
+# one-way door `remove` uses, for the same reason.
+cmd_unhide() {
+  ensure_store
+  local app=$1 summary=$2
+  [[ -n $app && -n $summary ]] || die "unhide needs an app and a summary"
+  with_lock unhide_rule "$app" "$summary"
+  printf '{"ok":true}\n'
+}
+
+cmd_hidden() {
+  ensure_store
+  [[ -s $hidden_file ]] || { printf '[]\n'; return; }
+  jq -Rc 'fromjson? // empty' "$hidden_file" 2>/dev/null | jq -s '.' 2>/dev/null || printf '[]\n'
+}
+
 # Clear is a line drawn under what you have seen, not a shredder. It used to
 # empty the archive, delete every stored image, and delete the source history
 # out from under the service as well, which is a lot of somebody's month to
@@ -684,6 +780,9 @@ case ${1:-} in
   list)   shift; cmd_list "${1:-200}" ;;
   remove) shift; cmd_remove "${1:-}" ;;
   clear)  shift; cmd_clear ;;
+  hide)   shift; cmd_hide "${1:-}" "${2:-}" ;;
+  unhide) shift; cmd_unhide "${1:-}" "${2:-}" ;;
+  hidden) shift; cmd_hidden ;;
   seen)   shift; cmd_seen "$@" ;;
   unread) shift; cmd_unread ;;
   seed)   shift; cmd_seed "${1:-25}" ;;
@@ -701,6 +800,9 @@ notification-center: the store behind the Omarchy notification center
   list [LIMIT]       the archive as JSON, newest first (default 200)
   remove KEY         drop one notification
   clear              drop all of them
+  hide APP SUMMARY   drop this and every future one matching exactly, on sight
+  unhide APP SUMMARY stop hiding future ones matching exactly
+  hidden             the hide rules as JSON
   seen [MS]          read or set when the center was last opened
   unread             how many arrived since then
   seed [N]           fill the archive with test traffic

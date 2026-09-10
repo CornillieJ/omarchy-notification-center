@@ -119,6 +119,10 @@ Panel {
   // -------------------------------------------------------------------- state
 
   readonly property var entries: store ? store.entries : []
+  readonly property var hiddenRules: store ? store.hiddenRules : []
+  // "list" is the ordinary view; "hidden" is the rules a card's "Hide these"
+  // link wrote, not a second copy of every notification they ever matched.
+  property string tab: "list"
   property string filter: ""
   // What the rows are marked against. Opening the center makes everything in
   // it read, so marking against `lastSeen` would mean the list never once
@@ -161,6 +165,14 @@ Panel {
 
   function clearAll() {
     if (store) store.clearAll()
+  }
+
+  function hide(entry) {
+    if (store && entry) store.hide(entry.app, entry.summary)
+  }
+
+  function unhide(rule) {
+    if (store && rule) store.unhide(rule.app, rule.summary)
   }
 
   function handleEntryAdded(entry) {
@@ -270,6 +282,7 @@ Panel {
       searching = false
       filter = ""
       search.text = ""
+      tab = "list"
       return
     }
     now = Date.now()
@@ -451,7 +464,7 @@ Panel {
             id: title
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            text: "NOTIFICATIONS"
+            text: root.tab === "hidden" ? "HIDDEN" : "NOTIFICATIONS"
             foreground: root.foreground
             fontFamily: root.fontFamily
           }
@@ -478,7 +491,7 @@ Panel {
               tooltipText: "Search these notifications  ( / )"
               foreground: root.searching ? Color.accent : root.foreground
               fontFamily: root.fontFamily
-              visible: root.entries.length > 0
+              visible: root.tab === "list" && root.entries.length > 0
               onClicked: root.searching ? root.endSearch() : root.startSearch()
             }
 
@@ -488,6 +501,7 @@ Panel {
               tooltipText: root.dnd ? "Allow notifications" : "Silence notifications"
               foreground: root.dnd ? Color.accent : root.foreground
               fontFamily: root.fontFamily
+              visible: root.tab === "list"
               enabled: root.notificationService !== null
               onClicked: root.toggleDnd()
             }
@@ -502,8 +516,26 @@ Panel {
               foreground: root.foreground
               fontFamily: root.fontFamily
               fontSize: Style.font.caption
+              visible: root.tab === "list"
               enabled: root.entries.length > 0
               onClicked: root.clearAll()
+            }
+
+            // The one control that shows in both tabs: it is how you get
+            // between them. A word rather than a glyph, same reasoning as
+            // Clear above it \u2014 this is not a common enough action to earn an
+            // icon nobody would recognize on sight.
+            Button {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.tab === "hidden" ? "Notifications" : "Hidden (" + root.hiddenRules.length + ")"
+              tooltipText: root.tab === "hidden"
+                ? "Back to notifications"
+                : "Notifications you've hidden"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              enabled: root.tab === "hidden" || root.hiddenRules.length > 0
+              onClicked: root.tab = (root.tab === "hidden" ? "list" : "hidden")
             }
           }
         }
@@ -513,7 +545,7 @@ Panel {
         TextField {
           id: search
           width: parent.width
-          visible: root.searching
+          visible: root.tab === "list" && root.searching
           placeholderText: "Search"
           foreground: root.foreground
           onTextChanged: root.filter = text
@@ -544,7 +576,7 @@ Panel {
           }
 
           height: Math.min(contentHeight, cap)
-          visible: rows.count > 0
+          visible: root.tab === "list" && rows.count > 0
           clip: true
           model: rows
           spacing: Style.space(6)
@@ -602,6 +634,7 @@ Panel {
 
             onClicked: root.activate(row.model)
             onRemoveRequested: root.remove(row.model.key)
+            onHideRequested: root.hide(row.model)
           }
         }
 
@@ -610,7 +643,7 @@ Panel {
         Text {
           textFormat: Text.PlainText
           width: parent.width
-          visible: rows.count === 0
+          visible: root.tab === "list" && rows.count === 0
           horizontalAlignment: Text.AlignHCenter
           topPadding: Style.space(22)
           bottomPadding: Style.space(22)
@@ -630,12 +663,138 @@ Panel {
           textFormat: Text.PlainText
           id: foot
           width: parent.width
-          visible: root.entries.length > 0 && root.filter === ""
+          visible: root.tab === "list" && root.entries.length > 0 && root.filter === ""
           horizontalAlignment: Text.AlignHCenter
           topPadding: Style.space(2)
           text: root.entries.length === 1
             ? "1 notification kept"
             : root.entries.length + " notifications kept \u00b7 " + root.keepDays + " days"
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          color: root.foreground
+          opacity: 0.4
+        }
+
+        // -------------------------------------------------------- hidden
+        //
+        // What is hidden here is the rule ("Chromium" + "Calendar"), not a
+        // second copy of every notification it has matched \u2014 this is meant
+        // to answer "what did I tell it to stop showing me", not to be a
+        // second archive.
+
+        ListView {
+          id: hiddenList
+          width: parent.width
+          readonly property int cap: {
+            var chrome = header.height + hiddenFoot.implicitHeight + content.spacing * 2
+            return Math.max(Style.space(160),
+                            popup.usableCardHeight - popup.verticalContentInset - chrome)
+          }
+          height: Math.min(contentHeight, cap)
+          visible: root.tab === "hidden" && root.hiddenRules.length > 0
+          clip: true
+          model: root.hiddenRules
+          spacing: Style.space(6)
+          boundsBehavior: Flickable.StopAtBounds
+          flickableDirection: Flickable.VerticalFlick
+          interactive: contentHeight > height
+          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+          readonly property real lane: Style.space(10)
+
+          delegate: Item {
+            id: hiddenRow
+            required property var modelData
+            width: hiddenList.width - hiddenList.lane
+            height: hiddenApp.implicitHeight + hiddenSummary.implicitHeight + Style.space(16)
+
+            Rectangle {
+              anchors.fill: parent
+              radius: Style.space(10)
+              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
+            }
+
+            Text {
+              id: hiddenApp
+              textFormat: Text.PlainText
+              anchors.left: parent.left
+              anchors.right: unhideLabel.left
+              anchors.top: parent.top
+              anchors.margins: Style.space(10)
+              text: String(hiddenRow.modelData.app || "")
+              elide: Text.ElideRight
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              color: root.foreground
+              opacity: 0.5
+            }
+
+            Text {
+              id: hiddenSummary
+              textFormat: Text.PlainText
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.leftMargin: Style.space(10)
+              anchors.rightMargin: Style.space(10)
+              anchors.top: hiddenApp.bottom
+              text: String(hiddenRow.modelData.summary || "")
+              elide: Text.ElideRight
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+              color: root.foreground
+            }
+
+            Text {
+              id: unhideLabel
+              textFormat: Text.PlainText
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.margins: Style.space(10)
+              text: "Unhide"
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              color: Color.accent
+              opacity: unhideMouse.containsMouse ? 1.0 : 0.8
+
+              MouseArea {
+                id: unhideMouse
+                anchors.fill: parent
+                anchors.margins: -Style.space(4)
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.unhide(hiddenRow.modelData)
+              }
+            }
+          }
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          width: parent.width
+          visible: root.tab === "hidden" && root.hiddenRules.length === 0
+          horizontalAlignment: Text.AlignHCenter
+          topPadding: Style.space(22)
+          bottomPadding: Style.space(22)
+          text: "Nothing hidden. \u201cHide these\u201d on a card adds it here."
+          wrapMode: Text.WordWrap
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          color: root.foreground
+          opacity: 0.55
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          id: hiddenFoot
+          width: parent.width
+          visible: root.tab === "hidden" && root.hiddenRules.length > 0
+          horizontalAlignment: Text.AlignHCenter
+          topPadding: Style.space(2)
+          text: root.hiddenRules.length === 1
+            ? "1 rule hidden"
+            : root.hiddenRules.length + " rules hidden"
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           color: root.foreground
