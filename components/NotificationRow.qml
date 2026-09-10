@@ -35,6 +35,7 @@ Item {
   property bool showBody: true
   property bool showPreview: true
   property bool unread: false
+  property bool expanded: false
 
   property color foreground: Color.foreground
   property string fontFamily: Style.font.family
@@ -294,21 +295,57 @@ Item {
         color: root.foreground
       }
 
-      // Two lines of message and no more. Long enough to tell you whether you
-      // need to go and open the thing, short enough that one chatty app cannot
-      // push a day of notifications off the bottom of the panel.
+      // Two lines of message and no more, unless asked for the rest: long
+      // enough to tell you whether you need to go and open the thing, short
+      // enough that one chatty app cannot push a day of notifications off the
+      // bottom of the panel.
       Text {
+        id: bodyText
         textFormat: Text.PlainText
         width: parent.width
         visible: root.showBody && root.cleanBody !== ""
         text: root.cleanBody
         wrapMode: Text.WordWrap
-        elide: Text.ElideRight
-        maximumLineCount: 2
+        elide: root.expanded ? Text.ElideNone : Text.ElideRight
+        maximumLineCount: root.expanded ? 0 : 2
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         color: root.foreground
         opacity: 0.75
+      }
+
+      // Only shown once there is something the two-line clamp actually cut
+      // off, or once expanded (so there is a way back). A MouseArea nested in
+      // `texts`, the same trick the dismiss button uses, sits on top of the
+      // card's own and takes the click before it reaches root.clicked().
+      Item {
+        id: expandRow
+        readonly property bool show: bodyText.visible && (bodyText.truncated || root.expanded)
+        width: parent.width
+        height: show ? expandLabel.implicitHeight + Style.space(2) : 0
+        visible: show
+
+        Text {
+          id: expandLabel
+          textFormat: Text.PlainText
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          text: root.expanded ? "Show less" : "Show more"
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+          color: Color.accent
+          opacity: expandMouse.containsMouse ? 1.0 : 0.8
+
+          MouseArea {
+            id: expandMouse
+            anchors.fill: parent
+            anchors.margins: -Style.space(4)
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.expanded = !root.expanded
+          }
+        }
       }
 
       // The picture, when the notification came with one. Wide rather than a
