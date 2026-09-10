@@ -474,8 +474,20 @@ remove_key() {
   local key=$1
   [[ -n $key ]] || return 0
   printf '%s\n' "$key" >> "$dismissed_file"
-  grep -vF "\"key\":\"$key\"" "$archive" > "$archive.tmp" 2>/dev/null || : > "$archive.tmp"
-  mv -f "$archive.tmp" "$archive"
+  # grep -v exits 1 when nothing matched the key, which here means every line
+  # was kept as-is rather than that anything went wrong. Treating that exit
+  # code as failure and truncating the tmp file on it — the previous
+  # behaviour — meant removing a key that did not match byte-for-byte (a
+  # differently formatted line, a key already gone) emptied the whole
+  # archive instead of doing nothing. Only a real read error (exit 2: missing
+  # file, bad permissions) should discard the tmp file.
+  grep -vF "\"key\":\"$key\"" "$archive" > "$archive.tmp" 2>/dev/null
+  local status=$?
+  if (( status <= 1 )) && [[ -f "$archive.tmp" ]]; then
+    mv -f "$archive.tmp" "$archive"
+  else
+    rm -f -- "$archive.tmp"
+  fi
   rm -f -- "$images/$key-appIcon" "$images/$key-image" "$images/$key-preview"
   # Both directories, not only history: a notification dismissed while its
   # toast is still on screen is sitting in the popup directory, and leaving it
