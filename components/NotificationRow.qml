@@ -36,6 +36,9 @@ Item {
   property bool showPreview: true
   property bool unread: false
   property bool expanded: false
+  // How many identical notifications this card stands in for. 1 draws exactly
+  // as before; more adds the stack peeking behind it and the ×N pill.
+  property int count: 1
 
   property color foreground: Color.foreground
   property string fontFamily: Style.font.family
@@ -51,6 +54,11 @@ Item {
   readonly property bool hasIcon: iconSource !== "" && icon.status !== Image.Error
   readonly property string initial: app === "" ? "?" : app.charAt(0).toUpperCase()
   readonly property bool hasPreview: showPreview && preview !== "" && previewImage.status !== Image.Error
+
+  // Capped at two: past that the extra layers would sit under the card
+  // anyway, and "a lot of these" is already said by the ×N pill.
+  readonly property int stackLayers: Math.min(2, Math.max(0, count - 1))
+  readonly property int stackStep: Style.space(5)
 
   // The body arrives as notification markup: a subset of HTML, plus whatever
   // the sender felt like putting in. Images are stripped rather than rendered,
@@ -97,14 +105,36 @@ Item {
     return Quickshell.iconPath(value, true)
   }
 
-  implicitHeight: card.implicitHeight
+  implicitHeight: card.implicitHeight + stackLayers * stackStep
 
   HoverHandler { id: hover }
+
+  // The stack look: thin rounded slivers peeking above the card, one per
+  // extra notification folded into it, each drawn before (so behind) the
+  // one nearer the card and inset a little further to fan out.
+  Repeater {
+    model: root.stackLayers
+    delegate: Rectangle {
+      id: ghost
+      required property int index
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: parent.top
+      anchors.topMargin: index * root.stackStep
+      anchors.leftMargin: (root.stackLayers - index) * Style.space(4)
+      anchors.rightMargin: (root.stackLayers - index) * Style.space(4)
+      height: Style.space(24)
+      radius: Style.space(12)
+      color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.05 + index * 0.05)
+    }
+  }
 
   Rectangle {
     id: card
     anchors.left: parent.left
     anchors.right: parent.right
+    anchors.top: parent.top
+    anchors.topMargin: root.stackLayers * root.stackStep
     implicitHeight: texts.implicitHeight + Style.space(20)
 
     // The theme has no colour for "slightly raised", so the card is made out
@@ -283,17 +313,51 @@ Item {
         }
       }
 
-      Text {
-        textFormat: Text.PlainText
+      Item {
         width: parent.width
+        height: summaryText.implicitHeight
         visible: root.summary !== ""
-        text: root.cleanSummary
-        elide: Text.ElideRight
-        maximumLineCount: 1
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.body
-        font.bold: true
-        color: root.foreground
+
+        Text {
+          id: summaryText
+          textFormat: Text.PlainText
+          anchors.left: parent.left
+          anchors.right: countPill.visible ? countPill.left : parent.right
+          anchors.rightMargin: countPill.visible ? Style.space(6) : 0
+          text: root.cleanSummary
+          elide: Text.ElideRight
+          maximumLineCount: 1
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+          color: root.foreground
+        }
+
+        // The count, said in the same breath as the text it multiplies rather
+        // than off in a corner: "×5" only means something next to what there
+        // are five of.
+        Rectangle {
+          id: countPill
+          visible: root.count > 1
+          anchors.right: parent.right
+          anchors.verticalCenter: summaryText.verticalCenter
+          width: countText.implicitWidth + Style.space(8)
+          height: Style.space(14)
+          radius: height / 2
+          color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.14)
+
+          Text {
+            id: countText
+            textFormat: Text.PlainText
+            anchors.centerIn: parent
+            text: "×" + root.count
+            font.family: root.fontFamily
+            font.pixelSize: Math.max(8, Style.font.caption - Style.space(2))
+            font.bold: true
+            color: root.foreground
+            opacity: 0.85
+          }
+        }
       }
 
       // Two lines of message and no more, unless asked for the rest: long
