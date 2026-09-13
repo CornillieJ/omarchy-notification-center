@@ -42,6 +42,11 @@ icon and all, and keeps it for 30 days.
   Right-clicking the bell in the bar does it without opening anything.
 - **The magnifier**, or `/`, searches everything kept. Escape leaves the
   search, Escape again closes the panel.
+- **Group**, in the header, folds notifications with identical text into one
+  card with a stacked look and a ×N count, so the app that fires the same
+  alert every few minutes doesn't push everything else off the screen.
+  Click it to step through matching by app + summary, then app + summary +
+  body, then off.
 
 ## Settings
 

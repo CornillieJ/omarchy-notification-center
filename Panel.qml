@@ -120,6 +120,10 @@ Panel {
 
   readonly property var entries: store ? store.entries : []
   property string filter: ""
+  // 0 off, 1 groups identical app+summary, 2 also requires the body to match.
+  // Not reset when the panel closes, unlike filter: this is a display mode
+  // you set once, not a transient like an open search field.
+  property int groupMode: 2
   // What the rows are marked against. Opening the center makes everything in
   // it read, so marking against `lastSeen` would mean the list never once
   // shows you which of these you had not seen, because the marks would be gone by the
@@ -155,19 +159,26 @@ Panel {
 
   Process { id: focusProc }
 
-  function remove(key) {
-    if (store) store.remove(key)
-  }
-
   function clearAll() {
     if (store) store.clearAll()
+  }
+
+  // Dismissing a grouped card takes every notification folded into it, not
+  // just the newest one it displays.
+  function removeRow(row) {
+    if (!store || !row) return
+    var keys = (row.groupKeys && row.groupKeys.length) ? row.groupKeys : [row.key]
+    for (var i = 0; i < keys.length; i++) store.remove(keys[i])
   }
 
   function handleEntryAdded(entry) {
     if (!entry || !entry.key) return
     if (root.opened && store) store.markSeen()
     if (!matches(entry)) return
-    rows.insert(0, rowFor(entry))
+    // Grouped mode may fold this into an existing row rather than add a new
+    // one, which the insert-at-front shortcut below can't express: rebuild.
+    if (root.groupMode === 0) rows.insert(0, rowFor(entry, 1, null))
+    else root.rebuild()
     if (root.opened && list.atYBeginning) Qt.callLater(function() {
       if (root.opened) list.positionViewAtBeginning()
     })
@@ -185,7 +196,7 @@ Panel {
         || String(entry.body || "").toLowerCase().indexOf(needle) >= 0
   }
 
-  function rowFor(entry) {
+  function rowFor(entry, count, groupKeys) {
     return {
       key: String(entry.key || ""),
       app: String(entry.app || ""),
@@ -199,17 +210,55 @@ Panel {
       urgency: Number(entry.urgency || 0),
       timestamp: Number(entry.timestamp || 0),
       day: dayOf(Number(entry.timestamp || 0)),
-      time: Qt.formatDateTime(new Date(Number(entry.timestamp || 0)), "HH:mm")
+      time: Qt.formatDateTime(new Date(Number(entry.timestamp || 0)), "HH:mm"),
+      count: Number(count || 1),
+      groupKeys: groupKeys || [String(entry.key || "")]
     }
+  }
+
+  // Same app and summary always; the body too once groupMode asks for it.
+  // JSON.stringify rather than a joined string: a notification's text is
+  // chosen by whoever sent it, so a plain separator could be forged to
+  // collide two different notifications into one key.
+  function groupKeyFor(entry) {
+    var parts = [String(entry.app || ""), String(entry.summary || "")]
+    if (root.groupMode >= 2) parts.push(String(entry.body || ""))
+    return JSON.stringify(parts)
   }
 
   function rebuild() {
     rows.clear()
-    for (var i = 0; i < entries.length; i++)
-      if (matches(entries[i])) rows.append(rowFor(entries[i]))
+    if (root.groupMode === 0) {
+      for (var i = 0; i < entries.length; i++)
+        if (matches(entries[i])) rows.append(rowFor(entries[i], 1, null))
+      return
+    }
+    // entries is newest-first, so the first occurrence of a key encountered
+    // here is also the newest: a group sits where its most recent notification
+    // would have, under the day it arrived on.
+    var order = []
+    var buckets = {}
+    for (var j = 0; j < entries.length; j++) {
+      var entry = entries[j]
+      if (!matches(entry)) continue
+      var k = groupKeyFor(entry)
+      var bucket = buckets[k]
+      if (bucket) {
+        bucket.count++
+        bucket.keys.push(String(entry.key || ""))
+      } else {
+        buckets[k] = { entry: entry, count: 1, keys: [String(entry.key || "")] }
+        order.push(k)
+      }
+    }
+    for (var m = 0; m < order.length; m++) {
+      var b = buckets[order[m]]
+      rows.append(rowFor(b.entry, b.count, b.keys))
+    }
   }
 
   onFilterChanged: rebuild()
+  onGroupModeChanged: rebuild()
 
   // The heading a notification is filed under. Days rather than hours, because
   // what you remember about a notification you are hunting for is which day it
@@ -462,6 +511,23 @@ Panel {
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(2)
 
+            // A word rather than an icon, and a word that names the state: the
+            // three modes read the same as the tooltip they cycle through, so
+            // there is nothing to remember about what stage you are on.
+            Button {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.groupMode === 0 ? "Group" : root.groupMode === 1 ? "Grouped" : "Grouped+"
+              tooltipText: root.groupMode === 0
+                ? "Group repeated notifications"
+                : root.groupMode === 1
+                  ? "Grouping identical app + summary · click to also match the body"
+                  : "Grouping identical app + summary + body · click to turn off"
+              foreground: root.groupMode > 0 ? Color.accent : root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              onClicked: root.groupMode = (root.groupMode + 1) % 3
+            }
+
             // Search is a button rather than a field standing open. An open
             // field takes the keyboard the moment the panel appears, and this
             // panel can be opened from a key binding while you are typing
@@ -595,13 +661,14 @@ Panel {
             now: root.now
             urgency: model.urgency
             unread: model.timestamp > root.readMark
+            count: model.count
             showBody: root.showBody
             showPreview: root.showPreview
             foreground: root.foreground
             fontFamily: root.fontFamily
 
             onClicked: root.activate(row.model)
-            onRemoveRequested: root.remove(row.model.key)
+            onRemoveRequested: root.removeRow(row.model)
           }
         }
 
