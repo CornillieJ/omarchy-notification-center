@@ -103,6 +103,13 @@ Item {
     Quickshell.execDetached(root.storeCommand(["clear"]))
   }
 
+  // The other clear: this archive, plus Omarchy's own notification history.
+  function clearEverything() {
+    entries = []
+    entriesReset()
+    Quickshell.execDetached(root.storeCommand(["clear-all"]))
+  }
+
   function loadHidden() {
     if (hiddenProc.running) return
     hiddenProc.command = root.storeCommand(["hidden"])

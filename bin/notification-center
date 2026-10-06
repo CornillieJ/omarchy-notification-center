@@ -619,6 +619,25 @@ cmd_clear() {
   printf '{"ok":true,"cleared":true}\n'
 }
 
+# The other clear: this one, plus Omarchy's own notification history (the one
+# behind the stock bell, and `omarchy-shell notifications showHistory`), plus
+# whatever toasts are currently on screen. `clear` on the omarchy-shell side
+# only forgets the recorded history and leaves live popups alone, so that
+# alone left on-screen notifications up after this ran; `dismissAll` is the
+# one that actually takes the toasts down. Everything below our own line is
+# already safe in this panel's archive, so wiping Omarchy's copy loses
+# nothing. Detached so a slow IPC round trip never holds the clear button, or
+# the lock, open.
+cmd_clear_all() {
+  ensure_store
+  with_lock clear_all
+  if command -v omarchy-shell >/dev/null 2>&1; then
+    omarchy-shell notifications clear >/dev/null 2>&1 &
+    omarchy-shell notifications dismissAll >/dev/null 2>&1 &
+  fi
+  printf '{"ok":true,"cleared":true}\n'
+}
+
 # When the center was last opened. Everything newer than this is what the bar
 # marks as unread, and it is a file rather than shell state because "unread"
 # has to survive a shell restart to mean anything.
@@ -780,6 +799,7 @@ case ${1:-} in
   list)   shift; cmd_list "${1:-200}" ;;
   remove) shift; cmd_remove "${1:-}" ;;
   clear)  shift; cmd_clear ;;
+  clear-all) shift; cmd_clear_all ;;
   hide)   shift; cmd_hide "${1:-}" "${2:-}" ;;
   unhide) shift; cmd_unhide "${1:-}" "${2:-}" ;;
   hidden) shift; cmd_hidden ;;
@@ -800,6 +820,7 @@ notification-center: the store behind the Omarchy notification center
   list [LIMIT]       the archive as JSON, newest first (default 200)
   remove KEY         drop one notification
   clear              drop all of them
+  clear-all          drop all of them, and Omarchy's own notification history
   hide APP SUMMARY   drop this and every future one matching exactly, on sight
   unhide APP SUMMARY stop hiding future ones matching exactly
   hidden             the hide rules as JSON

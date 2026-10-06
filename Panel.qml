@@ -167,6 +167,10 @@ Panel {
     if (store) store.clearAll()
   }
 
+  function clearEverything() {
+    if (store) store.clearEverything()
+  }
+
   function hide(entry) {
     if (store && entry) store.hide(entry.app, entry.summary)
   }
@@ -504,15 +508,17 @@ Panel {
 
         // -------------------------------------------------------- header
 
-        Item {
+        Column {
           id: header
           width: parent.width
-          height: Math.max(title.implicitHeight, actions.height)
+          // The action row has grown past what fits beside the title on one
+          // line (Clear list and Clear current pushed it over): stacked
+          // underneath, with room between, is the one layout that can't
+          // overlap the title no matter how many buttons end up in it.
+          spacing: Style.space(6)
 
           PanelSectionHeader {
             id: title
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
             text: root.tab === "hidden" ? "HIDDEN" : "NOTIFICATIONS"
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -521,7 +527,6 @@ Panel {
           Row {
             id: actions
             anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(2)
 
             // A word rather than an icon, and a word that names the state: the
@@ -578,7 +583,7 @@ Panel {
             // broom is not the place to find out which is which.
             Button {
               anchors.verticalCenter: parent.verticalCenter
-              text: "Clear"
+              text: "Clear list"
               tooltipText: "Empty the panel"
               foreground: root.foreground
               fontFamily: root.fontFamily
@@ -586,6 +591,23 @@ Panel {
               visible: root.tab === "list"
               enabled: root.entries.length > 0
               onClicked: root.clearAll()
+            }
+
+            // Clear list empties this panel; Clear current takes Omarchy's
+            // own notification history down with it, the one behind the
+            // stock bell, and dismisses whatever toasts are on screen right
+            // now too. Everything it drops is already sitting safe in this
+            // panel's archive, so nothing is lost — only seen twice.
+            Button {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Clear current"
+              tooltipText: "Also empty Omarchy's own notification history and dismiss on-screen toasts"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              visible: root.tab === "list"
+              enabled: root.entries.length > 0
+              onClicked: root.clearEverything()
             }
 
             // The one control that shows in both tabs: it is how you get
